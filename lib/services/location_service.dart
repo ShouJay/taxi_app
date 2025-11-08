@@ -185,13 +185,13 @@ class LocationService {
       );
 
       if (_currentPosition != null) {
-        print('📍 當前位置:');
-        print('   緯度: ${_currentPosition!.latitude.toStringAsFixed(6)}');
-        print('   經度: ${_currentPosition!.longitude.toStringAsFixed(6)}');
-        print('   精度: ${_currentPosition!.accuracy.toStringAsFixed(0)} 米');
-        print('   海拔: ${_currentPosition!.altitude.toStringAsFixed(1)} 米');
-        print('   速度: ${_currentPosition!.speed.toStringAsFixed(1)} m/s');
-        print('   方位: ${_currentPosition!.heading.toStringAsFixed(0)}°');
+        // print('📍 當前位置:');
+        // print('   緯度: ${_currentPosition!.latitude.toStringAsFixed(6)}');
+        // print('   經度: ${_currentPosition!.longitude.toStringAsFixed(6)}');
+        // print('   精度: ${_currentPosition!.accuracy.toStringAsFixed(0)} 米');
+        // print('   海拔: ${_currentPosition!.altitude.toStringAsFixed(1)} 米');
+        // print('   速度: ${_currentPosition!.speed.toStringAsFixed(1)} m/s');
+        // print('   方位: ${_currentPosition!.heading.toStringAsFixed(0)}°');
 
         // 立即發送一次位置
         _sendLocationUpdate(_currentPosition!);
@@ -236,12 +236,12 @@ class LocationService {
     ).listen(
       (position) {
         _currentPosition = position;
-        print('📍 位置更新 (移動觸發):');
-        print('   緯度: ${position.latitude.toStringAsFixed(6)}');
-        print('   經度: ${position.longitude.toStringAsFixed(6)}');
-        print('   精度: ${position.accuracy.toStringAsFixed(0)} 米');
-        print('   海拔: ${position.altitude.toStringAsFixed(1)} 米');
-        print('   速度: ${position.speed.toStringAsFixed(1)} m/s');
+        // print('📍 位置更新 (移動觸發):');
+        // print('   緯度: ${position.latitude.toStringAsFixed(6)}');
+        // print('   經度: ${position.longitude.toStringAsFixed(6)}');
+        // print('   精度: ${position.accuracy.toStringAsFixed(0)} 米');
+        // print('   海拔: ${position.altitude.toStringAsFixed(1)} 米');
+        // print('   速度: ${position.speed.toStringAsFixed(1)} m/s');
 
         // 發送位置更新
         _sendLocationUpdate(position);
@@ -266,13 +266,13 @@ class LocationService {
     _lastLocationSentTime = DateTime.now();
     _sentCount++;
 
-    print('📤 發送位置 #$_sentCount:');
-    print('   緯度: ${position.latitude.toStringAsFixed(6)}');
-    print('   經度: ${position.longitude.toStringAsFixed(6)}');
-    print('   精度: ${position.accuracy.toStringAsFixed(0)} 米');
-    print('   海拔: ${position.altitude.toStringAsFixed(1)} 米');
-    print('   速度: ${position.speed.toStringAsFixed(1)} m/s');
-    print('   時間: ${_lastLocationSentTime!.toString().substring(0, 19)}');
+    // print('📤 發送位置 #$_sentCount:');
+    // print('   緯度: ${position.latitude.toStringAsFixed(6)}');
+    // print('   經度: ${position.longitude.toStringAsFixed(6)}');
+    // print('   精度: ${position.accuracy.toStringAsFixed(0)} 米');
+    // print('   海拔: ${position.altitude.toStringAsFixed(1)} 米');
+    // print('   速度: ${position.speed.toStringAsFixed(1)} m/s');
+    // print('   時間: ${_lastLocationSentTime!.toString().substring(0, 19)}');
 
     webSocketManager.sendLocationUpdate(position.longitude, position.latitude);
   }

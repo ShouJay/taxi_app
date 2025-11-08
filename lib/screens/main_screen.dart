@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:video_player/video_player.dart';
 import '../managers/playback_manager.dart';
 import '../config/app_config.dart';
@@ -6,11 +7,17 @@ import '../config/app_config.dart';
 /// 主畫面 - 影片播放
 class MainScreen extends StatefulWidget {
   final PlaybackManager playbackManager;
+  final bool isAdminMode;
+  final Position? latestPosition;
+  final DateTime? lastLocationSentTime;
   final VoidCallback onSettingsRequested;
 
   const MainScreen({
     Key? key,
     required this.playbackManager,
+    required this.isAdminMode,
+    this.latestPosition,
+    this.lastLocationSentTime,
     required this.onSettingsRequested,
   }) : super(key: key);
 
@@ -53,13 +60,21 @@ class _MainScreenState extends State<MainScreen> {
             // 影片播放器或提示畫面
             Center(child: _buildContent()),
 
-            // 狀態指示器（調試用）
-            if (widget.playbackManager.state != PlaybackState.idle)
+            // 管理員模式資訊疊層
+            if (widget.isAdminMode &&
+                widget.playbackManager.state != PlaybackState.idle)
               Positioned(top: 40, left: 20, child: _buildStatusIndicator()),
 
             // 隊列指示器
-            if (widget.playbackManager.queueLength > 0)
+            if (widget.isAdminMode && widget.playbackManager.queueLength > 0)
               Positioned(top: 40, right: 20, child: _buildQueueIndicator()),
+
+            if (widget.isAdminMode)
+              Positioned(
+                left: 20,
+                bottom: 40,
+                child: _buildAdminInfoPanel(),
+              ),
           ],
         ),
       ),
@@ -159,6 +174,59 @@ class _MainScreenState extends State<MainScreen> {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAdminInfoPanel() {
+    final Position? position = widget.latestPosition;
+    final DateTime? sentTime = widget.lastLocationSentTime;
+    final PlaybackItem? currentItem = widget.playbackManager.currentItem;
+    final styleBase = const TextStyle(color: Colors.white, fontSize: 14);
+
+    final latitude =
+        position != null ? position.latitude.toStringAsFixed(6) : '--';
+    final longitude =
+        position != null ? position.longitude.toStringAsFixed(6) : '--';
+    final speedKmh =
+        position != null ? (position.speed * 3.6).clamp(0, double.infinity) : null;
+    final sentTimeText = _formatDateTime(sentTime);
+    final playbackSource = _describePlaybackSource(currentItem);
+    final videoName = currentItem?.advertisementName ?? '尚未播放';
+
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 360),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.75),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blueAccent.withOpacity(0.6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            '管理員資訊',
+            style: TextStyle(
+              color: Colors.blueAccent,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text('影片: $videoName', style: styleBase),
+          const SizedBox(height: 4),
+          Text('來源: $playbackSource', style: styleBase),
+          const Divider(height: 18, color: Colors.white24),
+          Text('經度: $longitude', style: styleBase),
+          Text('緯度: $latitude', style: styleBase),
+          Text(
+            '速度: ${speedKmh != null ? '${speedKmh.toStringAsFixed(1)} km/h' : '--'}',
+            style: styleBase,
+          ),
+          Text('最後發送: $sentTimeText', style: styleBase),
         ],
       ),
     );
@@ -281,6 +349,43 @@ class _MainScreenState extends State<MainScreen> {
   void _openSettings() {
     print('⚙️ 開啟設定頁面');
     widget.onSettingsRequested();
+  }
+
+  String _formatDateTime(DateTime? value) {
+    if (value == null) {
+      return '--';
+    }
+    final local = value.toLocal();
+    return '${local.year.toString().padLeft(4, '0')}-'
+        '${local.month.toString().padLeft(2, '0')}-'
+        '${local.day.toString().padLeft(2, '0')} '
+        '${local.hour.toString().padLeft(2, '0')}:'
+        '${local.minute.toString().padLeft(2, '0')}:'
+        '${local.second.toString().padLeft(2, '0')}';
+  }
+
+  String _describePlaybackSource(PlaybackItem? item) {
+    if (item == null) {
+      return '尚未播放';
+    }
+
+    if (item.isOverride || item.trigger == 'admin_override') {
+      return '推播插播';
+    }
+
+    if (item.trigger == 'location_based') {
+      return 'GPS 被動播放';
+    }
+
+    if (item.advertisementId.startsWith('local-')) {
+      return '本地循環播放';
+    }
+
+    if (item.trigger == 'http_heartbeat') {
+      return '後端推播';
+    }
+
+    return '一般播放';
   }
 
   @override

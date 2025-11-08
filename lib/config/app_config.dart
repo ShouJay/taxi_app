@@ -23,6 +23,7 @@ class AppConfig {
   // 本地儲存鍵值
   static const String deviceIdKey = 'device_id';
   static const String defaultDeviceId = 'taxi-AAB-1234-rooftop';
+  static const String adminModeKey = 'admin_mode';
 
   // 播放配置
   static const int tapCountToSettings = 5;

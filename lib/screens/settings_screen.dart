@@ -14,6 +14,8 @@ class SettingsScreen extends StatefulWidget {
   final PlaybackManager playbackManager;
   final DownloadManager downloadManager;
   final LocationService? locationService;
+  final bool isAdminMode;
+  final Future<void> Function(bool) onAdminModeChanged;
   final VoidCallback onBack;
 
   const SettingsScreen({
@@ -22,6 +24,8 @@ class SettingsScreen extends StatefulWidget {
     required this.playbackManager,
     required this.downloadManager,
     this.locationService,
+    required this.isAdminMode,
+    required this.onAdminModeChanged,
     required this.onBack,
   }) : super(key: key);
 
@@ -35,6 +39,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _connectionStatus = '檢查中...';
   String _lastUpdate = '---';
   bool _isSaving = false;
+  late bool _isAdminMode;
+  bool _isUpdatingAdminMode = false;
 
   @override
   void initState() {
@@ -45,6 +51,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _serverUrlController = TextEditingController(
       text: widget.webSocketManager.serverUrl,
     );
+    _isAdminMode = widget.isAdminMode;
     _updateConnectionStatus();
     _startStatusMonitoring();
   }
@@ -118,6 +125,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               hint: '例如: ws://your-server.com',
               icon: Icons.cloud,
             ),
+            const SizedBox(height: 24),
+
+            _buildAdminModeTile(),
             const SizedBox(height: 24),
 
             // 儲存按鈕
@@ -316,6 +326,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  Widget _buildAdminModeTile() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+      ),
+      child: SwitchListTile(
+        title: const Text(
+          '管理員模式',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        subtitle: Text(
+          '開啟後於播放畫面顯示調試資訊（GPS、播放來源等）',
+          style: TextStyle(color: Colors.grey[600]),
+        ),
+        value: _isAdminMode,
+        onChanged: _isUpdatingAdminMode ? null : _handleAdminModeChanged,
+        secondary: Icon(
+          _isAdminMode ? Icons.admin_panel_settings : Icons.visibility_off,
+          color: _isAdminMode ? Colors.blue : Colors.grey,
+        ),
+      ),
+    );
+  }
+
   /// 建立操作按鈕
   Widget _buildActionButton({
     required String label,
@@ -402,6 +438,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
       widget.webSocketManager.connect();
       _showMessage('正在重新連接...');
     });
+  }
+
+  Future<void> _handleAdminModeChanged(bool value) async {
+    setState(() {
+      _isUpdatingAdminMode = true;
+    });
+    try {
+      await widget.onAdminModeChanged(value);
+      setState(() {
+        _isAdminMode = value;
+      });
+    } catch (e) {
+      _showMessage('切換管理員模式失敗: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUpdatingAdminMode = false;
+        });
+      }
+    }
   }
 
   /// 清空播放隊列

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'config/app_config.dart';
 import 'services/websocket_manager.dart';
@@ -60,6 +61,9 @@ class _AppContainerState extends State<AppContainer>
 
   bool _showSettings = false;
   bool _isInitialized = false;
+  bool _isAdminMode = false;
+  Position? _latestPosition;
+  DateTime? _lastLocationSentTime;
 
   @override
   void initState() {
@@ -73,9 +77,13 @@ class _AppContainerState extends State<AppContainer>
     try {
       print('🚀 初始化應用...');
 
+      final prefs = await SharedPreferences.getInstance();
+
       // 1. 載入設備 ID
-      final deviceId = await _loadDeviceId();
+      final deviceId = await _loadDeviceId(prefs);
       print('📱 設備 ID: $deviceId');
+
+      final adminMode = prefs.getBool(AppConfig.adminModeKey) ?? false;
 
       // 2. 初始化管理器
       _webSocketManager = WebSocketManager(
@@ -89,6 +97,17 @@ class _AppContainerState extends State<AppContainer>
 
       // 初始化位置服務
       _locationService = LocationService(webSocketManager: _webSocketManager);
+      _locationService.onLocationUpdate = (position) {
+        if (!mounted) return;
+        setState(() {
+          _latestPosition = position;
+          _lastLocationSentTime = _locationService.lastLocationSentTime;
+        });
+      };
+      _locationService.onLocationAcknowledged = (_) {
+        if (!mounted) return;
+        setState(() {});
+      };
 
       // 3. 設置 WebSocket 事件處理
       _setupWebSocketHandlers();
@@ -104,6 +123,9 @@ class _AppContainerState extends State<AppContainer>
 
       setState(() {
         _isInitialized = true;
+        _isAdminMode = adminMode;
+        _latestPosition = _locationService.currentPosition;
+        _lastLocationSentTime = _locationService.lastLocationSentTime;
       });
 
       print('✅ 應用初始化完成');
@@ -113,9 +135,8 @@ class _AppContainerState extends State<AppContainer>
   }
 
   /// 載入設備 ID
-  Future<String> _loadDeviceId() async {
+  Future<String> _loadDeviceId(SharedPreferences prefs) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
       final deviceId = prefs.getString(AppConfig.deviceIdKey);
 
       if (deviceId != null && deviceId.isNotEmpty) {
@@ -129,6 +150,15 @@ class _AppContainerState extends State<AppContainer>
       print('❌ 載入設備 ID 失敗: $e');
       return AppConfig.defaultDeviceId;
     }
+  }
+
+  Future<void> _updateAdminMode(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(AppConfig.adminModeKey, value);
+    if (!mounted) return;
+    setState(() {
+      _isAdminMode = value;
+    });
   }
 
   /// 設置 WebSocket 事件處理
@@ -293,6 +323,8 @@ class _AppContainerState extends State<AppContainer>
             playbackManager: _playbackManager,
             downloadManager: _downloadManager,
             locationService: _locationService,
+            isAdminMode: _isAdminMode,
+            onAdminModeChanged: _updateAdminMode,
             onBack: () {
               setState(() {
                 _showSettings = false;
@@ -301,6 +333,9 @@ class _AppContainerState extends State<AppContainer>
           )
         : MainScreen(
             playbackManager: _playbackManager,
+            isAdminMode: _isAdminMode,
+            latestPosition: _latestPosition,
+            lastLocationSentTime: _lastLocationSentTime,
             onSettingsRequested: () {
               setState(() {
                 _showSettings = true;
