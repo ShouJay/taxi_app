@@ -9,6 +9,7 @@ class LocationService {
   Timer? _locationTimer;
   Position? _currentPosition;
   bool _isRunning = false;
+  StreamSubscription<Position>? _positionSubscription;
 
   // 位置確認追蹤
   DateTime? _lastLocationSentTime;
@@ -172,6 +173,8 @@ class LocationService {
 
     _locationTimer?.cancel();
     _locationTimer = null;
+    _positionSubscription?.cancel();
+    _positionSubscription = null;
     _isRunning = false;
 
     print('⏹️ 位置服務已停止');
@@ -227,13 +230,15 @@ class LocationService {
 
   /// 監聽位置變化（移動時更新）
   void _startLocationStream() {
-    Geolocator.getPositionStream(
+    _positionSubscription?.cancel();
+    final positionStream = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.medium,
         distanceFilter: 10, // 移動 10 米才更新
-        timeLimit: Duration(seconds: 30), // 30 秒超時
       ),
-    ).listen(
+    );
+
+    _positionSubscription = positionStream.listen(
       (position) {
         _currentPosition = position;
         // print('📍 位置更新 (移動觸發):');
@@ -248,8 +253,18 @@ class LocationService {
         onLocationUpdate?.call(position);
       },
       onError: (error) {
-        print('❌ 位置監聽錯誤: $error');
-        onError?.call('位置監聽錯誤: $error');
+        final message = '位置監聽錯誤: $error';
+        print('❌ $message');
+        onError?.call(message);
+
+        if (error is TimeoutException) {
+          // 重新啟動位置串流，避免因超時而停止更新
+          Future.delayed(const Duration(seconds: 1), () {
+            if (_isRunning) {
+              _startLocationStream();
+            }
+          });
+        }
       },
     );
 
@@ -319,5 +334,7 @@ class LocationService {
   /// 清理資源
   void dispose() {
     stop();
+    _positionSubscription?.cancel();
+    _positionSubscription = null;
   }
 }

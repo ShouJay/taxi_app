@@ -100,13 +100,19 @@ class DownloadManager {
   }
 
   /// 開始下載影片
+  /// 開始下載影片
   Future<bool> startDownload({
     required String advertisementId,
     Function(DownloadTask)? onProgress,
   }) async {
-    // 檢查是否已經在下載
-    if (_tasks.containsKey(advertisementId)) {
-      print('⚠️ 影片 $advertisementId 已在下載隊列中');
+    // 檢查是否已經在下載 (這個檢查仍然需要)
+    if (_tasks.containsKey(advertisementId) && _tasks[advertisementId]!.status == DownloadStatus.downloading) {
+      print('⚠️ 影片 $advertisementId 正在下載中');
+
+      // 🔽🔽🔽 修改點 A: 如果已在下載，也要綁定 onProgress 🔽🔽🔽
+      if (onProgress != null) {
+        _progressControllers[advertisementId]?.stream.listen(onProgress);
+      }
       return false;
     }
 
@@ -118,6 +124,18 @@ class DownloadManager {
         return false;
       }
 
+      // 🔽🔽🔽 修改點 B: 提早建立控制器 🔽🔽🔽
+      // 提早建立或獲取控制器，以便我們可以立即發送「已完成」通知
+      final controller = _progressControllers.putIfAbsent(
+        advertisementId,
+            () => StreamController<DownloadTask>.broadcast(),
+      );
+      if (onProgress != null) {
+        // 這裡可以加上邏輯防止重複監聽，但為簡潔起見暫時省略
+        controller.stream.listen(onProgress);
+      }
+      // 🔼🔼🔼 修改點 B: 結束 🔼🔼🔼
+
       // 檢查檔案是否已存在
       final videoPath = await _getVideoPath(downloadInfo.filename);
       final file = File(videoPath);
@@ -126,14 +144,32 @@ class DownloadManager {
         final fileSize = await file.length();
         if (fileSize == downloadInfo.fileSize) {
           print('✅ 檔案已存在: ${downloadInfo.filename}');
-          return true;
+
+          // 🔽🔽🔽 修改點 C: 檔案已存在，立即通知 onProgress 🔽🔽🔽
+          // 建立一個 "已完成" 的任務
+          final completedTask = DownloadTask(
+            advertisementId: advertisementId,
+            downloadInfo: downloadInfo,
+            status: DownloadStatus.completed,
+            progress: 100,
+            outputFile: file,
+          );
+
+          // 使用 scheduleMicrotask 確保此通知在當前函數返回後才非同步發出
+          scheduleMicrotask(() {
+            _notifyProgress(completedTask);
+          });
+
+          return true; // 表示任務已處理 (或已存在)
+          // 🔼🔼🔼 修改點 C: 結束 🔼🔼🔼
+
         } else {
           print('⚠️ 檔案大小不符，重新下載');
           await file.delete();
         }
       }
 
-      // 建立下載任務
+      // 建立下載任務 (如果檔案不存在或大小不符)
       final task = DownloadTask(
         advertisementId: advertisementId,
         downloadInfo: downloadInfo,
@@ -142,13 +178,8 @@ class DownloadManager {
       );
       _tasks[advertisementId] = task;
 
-      // 建立進度控制器
-      final controller = StreamController<DownloadTask>.broadcast();
-      _progressControllers[advertisementId] = controller;
-
-      if (onProgress != null) {
-        controller.stream.listen(onProgress);
-      }
+      // (控制器已在前面建立)
+      _notifyProgress(task); // 通知「正在下載」
 
       // 開始背景下載
       _downloadInBackground(task);

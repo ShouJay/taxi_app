@@ -23,6 +23,8 @@ class WebSocketManager {
   Function(String)? onRegistrationSuccess;
   Function(String)? onRegistrationError;
   Function(Map<String, dynamic>)? onLocationAck;
+  Function(String, List<dynamic>)? onStartCampaignPlayback;
+  Function()? onRevertToLocalPlaylist;
 
   // 定時器
   Timer? _heartbeatTimer;
@@ -89,6 +91,8 @@ class WebSocketManager {
     _socket!.on('download_video', _onDownloadVideo);
     _socket!.on('download_status_ack', _onDownloadStatusAck);
     _socket!.on('force_disconnect', _onForceDisconnect);
+    _socket!.on('start_campaign_playback', _onStartCampaignPlayback);
+    _socket!.on('revert_to_local_playlist', _onRevertToLocalPlaylist);
   }
 
   /// 註冊設備
@@ -296,6 +300,49 @@ class WebSocketManager {
   void _onForceDisconnect(dynamic data) {
     print('⚠️ 伺服器強制斷開: ${data['reason']}');
     disconnect();
+  }
+
+  void _onStartCampaignPlayback(dynamic data) {
+    final campaignId = data is Map<String, dynamic>
+        ? data['campaign_id'] as String? ?? ''
+        : '';
+    final playlist = data is Map<String, dynamic>
+        ? (data['playlist'] as List<dynamic>? ?? [])
+        : const [];
+
+    if (campaignId.isEmpty) {
+      print('⚠️ 收到活動播放命令但缺少 campaign_id: $data');
+      return;
+    }
+
+    print('🎬 收到活動播放命令: $campaignId (項目: ${playlist.length})');
+    onStartCampaignPlayback?.call(campaignId, playlist);
+  }
+
+  void _onRevertToLocalPlaylist(dynamic data) {
+    print('🏠 收到切換回本地播放命令');
+    onRevertToLocalPlaylist?.call();
+  }
+
+  void sendPlaybackError({
+    required String error,
+    required String campaignId,
+    required String videoFilename,
+  }) {
+    if (!isConnected) {
+      print('⚠️ 未連接，無法發送播放錯誤: $error');
+      return;
+    }
+
+    final payload = {
+      'device_id': deviceId,
+      'error': error,
+      'campaign_id': campaignId,
+      'video_filename': videoFilename,
+    };
+
+    _socket!.emit('playback_error', payload);
+    print('🚨 發送播放錯誤: $payload');
   }
 
   /// 更新設備 ID

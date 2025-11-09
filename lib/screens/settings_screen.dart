@@ -184,7 +184,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.queue_music,
               color: Colors.purple,
             ),
-            
+            if (widget.playbackManager.playbackMode ==
+                PlaybackMode.campaign) ...[
+              const SizedBox(height: 12),
+              _buildStatusCard(
+                title: '活動播放模式',
+                value: widget.playbackManager.activeCampaignId != null
+                    ? '活動 ID: ${widget.playbackManager.activeCampaignId}'
+                    : '活動播放中',
+                icon: Icons.campaign,
+                color: Colors.purpleAccent,
+              ),
+            ],
+
             // GPS 位置確認狀態
             if (widget.locationService != null) ...[
               const SizedBox(height: 12),
@@ -201,7 +213,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 12),
               _buildStatusCard(
                 title: '位置統計',
-                value: '已發送: ${widget.locationService!.sentCount} | '
+                value:
+                    '已發送: ${widget.locationService!.sentCount} | '
                     '已確認: ${widget.locationService!.ackCount}',
                 icon: Icons.analytics,
                 color: Colors.blue,
@@ -469,29 +482,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// 建立播放列表區段
   Widget _buildPlaylistSection() {
     final playlist = widget.playbackManager.getFullPlaylist();
+    final systemPlaylist = playlist
+        .where((item) => !item.isLocalVideo)
+        .toList();
+    final localPlaylist = playlist.where((item) => item.isLocalVideo).toList();
 
-    if (playlist.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.grey.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildPlaylistGroup(
+          title: '播放清單（系統）',
+          emptyHint: '目前沒有活動或排程中的影片',
+          items: systemPlaylist,
         ),
-        child: const Center(
-          child: Text('暫無播放列表', style: TextStyle(color: Colors.grey)),
+        const SizedBox(height: 24),
+        _buildPlaylistGroup(
+          title: '本地影片清單',
+          emptyHint: '尚未匯入本地影片',
+          items: localPlaylist,
         ),
-      );
-    }
+      ],
+    );
+  }
 
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxHeight: 400),
-      child: ListView.builder(
-        shrinkWrap: true,
-        itemCount: playlist.length,
-        itemBuilder: (context, index) {
-          final item = playlist[index];
-          return _buildPlaylistItem(item);
-        },
+  Widget _buildPlaylistGroup({
+    required String title,
+    required String emptyHint,
+    required List<PlaybackInfo> items,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        if (items.isEmpty)
+          _buildEmptyPlaylistCard(emptyHint)
+        else
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: items.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final item = items[index];
+              return _buildPlaylistItem(item);
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _buildEmptyPlaylistCard(String hint) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.grey.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        hint,
+        style: const TextStyle(color: Colors.grey),
+        textAlign: TextAlign.center,
       ),
     );
   }

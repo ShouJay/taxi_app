@@ -70,11 +70,7 @@ class _MainScreenState extends State<MainScreen> {
               Positioned(top: 40, right: 20, child: _buildQueueIndicator()),
 
             if (widget.isAdminMode)
-              Positioned(
-                left: 20,
-                bottom: 40,
-                child: _buildAdminInfoPanel(),
-              ),
+              Positioned(left: 20, bottom: 40, child: _buildAdminInfoPanel()),
           ],
         ),
       ),
@@ -86,12 +82,22 @@ class _MainScreenState extends State<MainScreen> {
     final controller = widget.playbackManager.controller;
     final state = widget.playbackManager.state;
 
+    // 在載入過程中顯示進度條，避免已被釋放的控制器仍被使用
+    if (state == PlaybackState.loading) {
+      return const Center(
+        child: CircularProgressIndicator(color: Colors.white),
+      );
+    }
+
+    if (state == PlaybackState.error) {
+      return _buildErrorScreen();
+    }
+
     // 如果是閒置狀態且沒有控制器，顯示提示畫面
     if (state == PlaybackState.idle && controller == null) {
       return _buildWelcomeScreen();
     }
 
-    // 如果正在載入
     if (controller == null || !controller.value.isInitialized) {
       return const Center(
         child: CircularProgressIndicator(color: Colors.white),
@@ -101,7 +107,7 @@ class _MainScreenState extends State<MainScreen> {
     // 顯示影片
     return AspectRatio(
       aspectRatio: controller.value.aspectRatio,
-      child: VideoPlayer(controller),
+      child: VideoPlayer(controller, key: ValueKey(controller)),
     );
   }
 
@@ -183,14 +189,21 @@ class _MainScreenState extends State<MainScreen> {
     final Position? position = widget.latestPosition;
     final DateTime? sentTime = widget.lastLocationSentTime;
     final PlaybackItem? currentItem = widget.playbackManager.currentItem;
+    final bool isCampaignMode =
+        widget.playbackManager.playbackMode == PlaybackMode.campaign;
+    final String campaignId =
+        widget.playbackManager.activeCampaignId ?? '未提供';
     final styleBase = const TextStyle(color: Colors.white, fontSize: 14);
 
-    final latitude =
-        position != null ? position.latitude.toStringAsFixed(6) : '--';
-    final longitude =
-        position != null ? position.longitude.toStringAsFixed(6) : '--';
-    final speedKmh =
-        position != null ? (position.speed * 3.6).clamp(0, double.infinity) : null;
+    final latitude = position != null
+        ? position.latitude.toStringAsFixed(6)
+        : '--';
+    final longitude = position != null
+        ? position.longitude.toStringAsFixed(6)
+        : '--';
+    final speedKmh = position != null
+        ? (position.speed * 3.6).clamp(0, double.infinity)
+        : null;
     final sentTimeText = _formatDateTime(sentTime);
     final playbackSource = _describePlaybackSource(currentItem);
     final videoName = currentItem?.advertisementName ?? '尚未播放';
@@ -219,6 +232,16 @@ class _MainScreenState extends State<MainScreen> {
           Text('影片: $videoName', style: styleBase),
           const SizedBox(height: 4),
           Text('來源: $playbackSource', style: styleBase),
+          if (isCampaignMode) ...[
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                const Icon(Icons.campaign, color: Colors.purpleAccent, size: 18),
+                const SizedBox(width: 6),
+                Text('活動播放中 (ID: $campaignId)', style: styleBase),
+              ],
+            ),
+          ],
           const Divider(height: 18, color: Colors.white24),
           Text('經度: $longitude', style: styleBase),
           Text('緯度: $latitude', style: styleBase),
@@ -232,10 +255,38 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
+  Widget _buildErrorScreen() {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white10,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: const Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, color: Colors.redAccent, size: 64),
+          SizedBox(height: 16),
+          Text('播放發生錯誤', style: TextStyle(color: Colors.white, fontSize: 20)),
+          SizedBox(height: 8),
+          Text(
+            '系統將自動嘗試播放下一支影片',
+            style: TextStyle(color: Colors.white70, fontSize: 16),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 建立狀態指示器
   Widget _buildStatusIndicator() {
     final state = widget.playbackManager.state;
     final currentItem = widget.playbackManager.currentItem;
+    final bool isCampaignMode =
+        widget.playbackManager.playbackMode == PlaybackMode.campaign;
+    final String campaignId =
+        widget.playbackManager.activeCampaignId ?? '未提供';
 
     IconData icon;
     String text;
@@ -269,24 +320,47 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.7),
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Row(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color, size: 20),
-          const SizedBox(width: 8),
-          Text(
-            text,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                text,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
+          if (isCampaignMode) ...[
+            const SizedBox(height: 6),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.campaign, color: Colors.purpleAccent, size: 18),
+                const SizedBox(width: 6),
+                Text(
+                  '活動播放中 (ID: $campaignId)',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

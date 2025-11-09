@@ -25,13 +25,18 @@ class PlaybackItem {
 /// 播放狀態
 enum PlaybackState { idle, loading, playing, paused, error }
 
+/// 播放模式
+enum PlaybackMode { local, campaign }
+
 /// 播放管理器
 class PlaybackManager {
   VideoPlayerController? _currentController;
   final DownloadManager downloadManager;
   final List<PlaybackItem> _playQueue = [];
+  final List<PlaybackItem> _campaignPlaylist = [];
   List<String> _localVideoPlaylist = [];
   int _currentLocalVideoIndex = 0;
+  int _currentCampaignIndex = 0;
 
   // 當前活動的 location_based 廣告列表（用於循環播放）
   List<PlaybackItem> _locationBasedAds = [];
@@ -39,11 +44,20 @@ class PlaybackManager {
   String? _currentCampaignId;
   DateTime? _lastLocationAdReceivedTime; // 最後一次收到位置廣告的時間
 
+  PlaybackMode _playbackMode = PlaybackMode.local;
+  String? _activeCampaignId;
+
   PlaybackState _state = PlaybackState.idle;
   PlaybackState get state => _state;
+  PlaybackMode get playbackMode => _playbackMode;
+  String? get activeCampaignId => _activeCampaignId;
 
   PlaybackItem? _currentItem;
   PlaybackItem? get currentItem => _currentItem;
+
+  // 🔽🔽🔽 FIX 1: (最關鍵) 加入播放鎖定旗標，防止重入 🔽🔽🔽
+  bool _isPlayingNext = false;
+  // 🔼🔼🔼 FIX 1: 結束 🔼🔼🔼
 
   // 事件回調
   Function(PlaybackState)? onStateChanged;
@@ -68,6 +82,75 @@ class PlaybackManager {
   /// 刷新本地影片播放列表
   Future<void> refreshLocalPlaylist() async {
     await _loadLocalVideoPlaylist();
+  }
+
+  /// 啟動活動播放
+  Future<void> startCampaignPlayback({
+    required String campaignId,
+    required List<PlaybackItem> playlist,
+  }) async {
+    if (playlist.isEmpty) {
+      print('⚠️ 活動播放列表為空，保持本地模式');
+      return;
+    }
+
+    _playbackMode = PlaybackMode.campaign;
+    _activeCampaignId = campaignId;
+    _currentCampaignIndex = 0;
+
+    _campaignPlaylist
+      ..clear()
+      ..addAll(
+        playlist.map(
+          (item) => PlaybackItem(
+            videoFilename: item.videoFilename,
+            advertisementId: item.advertisementId,
+            advertisementName: item.advertisementName,
+            isOverride: item.isOverride,
+            trigger: item.trigger.isNotEmpty ? item.trigger : 'campaign',
+            campaignId: item.campaignId ?? campaignId,
+          ),
+        ),
+      );
+
+    print('🎯 切換至活動播放模式: $campaignId，影片數量: ${_campaignPlaylist.length}');
+
+    // 立即切換至活動播放
+    if (_isPlayingNext) {
+      print('ℹ️ 正在切換影片，活動播放將在下一輪開始');
+      return;
+    }
+
+    if (_state == PlaybackState.playing || _state == PlaybackState.loading) {
+      await _stopCurrentVideo();
+    }
+
+    await _playNext();
+  }
+
+  /// 回復本地播放模式
+  Future<void> revertToLocalPlayback() async {
+    if (_playbackMode == PlaybackMode.local) {
+      print('🏠 已處於本地播放模式');
+      return;
+    }
+
+    print('🏠 恢復本地播放模式');
+    _playbackMode = PlaybackMode.local;
+    _activeCampaignId = null;
+    _campaignPlaylist.clear();
+    _currentCampaignIndex = 0;
+
+    if (_isPlayingNext) {
+      print('ℹ️ 正在切換影片，等待當前流程結束後回復');
+      return;
+    }
+
+    if (_state == PlaybackState.playing || _state == PlaybackState.loading) {
+      await _stopCurrentVideo();
+    }
+
+    await _playNext();
   }
 
   /// 插播廣告
@@ -95,7 +178,8 @@ class PlaybackManager {
 
       // 如果當前正在播放，停止並播放新廣告
       if (_state == PlaybackState.playing) {
-        await _stopCurrentVideo();
+        // 這裡不需要 await _stopCurrentVideo()，
+        // _playNext() 會處理停止邏輯
         await _playNext();
       } else {
         await _playNext();
@@ -146,15 +230,19 @@ class PlaybackManager {
     if (_state == PlaybackState.idle ||
         (_currentItem != null &&
             _currentItem!.advertisementId.startsWith('local-'))) {
-      _playNextLocationAd();
+      _playNextLocationAd(); // 這裡不用 await，讓它異步觸發 _playNext
     }
   }
 
   /// 播放下一個位置廣告（循環）
   Future<void> _playNextLocationAd() async {
+    // 注意：這個方法現在由 _playNext() 統一調度
+    // 所以我們只需要更新 _currentItem 和索引
+    // _playNext() 會負責實際的 _playVideo
+
     if (_locationBasedAds.isEmpty) {
-      print('⚠️ 位置廣告列表為空，播放本地影片');
-      await _playNextLocalVideo();
+      print('⚠️ 位置廣告列表為空，將播放本地影片');
+      await _playNextLocalVideo(); // 改為調用本地影片
       return;
     }
 
@@ -163,7 +251,7 @@ class PlaybackManager {
     onItemChanged?.call(item);
 
     print(
-      '▶️ 播放位置廣告 (${_currentLocationAdIndex + 1}/${_locationBasedAds.length}): ${item.advertisementName}',
+      '▶️ 準備播放位置廣告 (${_currentLocationAdIndex + 1}/${_locationBasedAds.length}): ${item.advertisementName}',
     );
     await _playVideo(item.videoFilename);
 
@@ -223,7 +311,7 @@ class PlaybackManager {
     // 檢查是否有本地影片可播放
     if (_localVideoPlaylist.isNotEmpty) {
       print('✅ 開始循環播放本地影片');
-      await _playNextLocalVideo();
+      await _playNext(); // 統一由 _playNext() 啟動
     } else {
       print('⚠️ 沒有任何影片可播放，顯示歡迎畫面');
       _updateState(PlaybackState.idle);
@@ -232,37 +320,78 @@ class PlaybackManager {
 
   /// 播放下一個影片
   Future<void> _playNext() async {
-    // 優先播放隊列中的廣告（非 location_based）
-    if (_playQueue.isNotEmpty) {
-      final item = _playQueue.removeAt(0);
-      _currentItem = item;
-      onItemChanged?.call(item);
-
-      print('▶️ 播放隊列廣告: ${item.advertisementName}');
-      await _playVideo(item.videoFilename);
+    // 🔽🔽🔽 FIX 1: (最關鍵) 檢查旗標 🔽🔽🔽
+    if (_isPlayingNext) {
+      print("⚠️ 正在切換影片中，忽略本次 _playNext 請求");
       return;
     }
 
-    // 播放位置相關的廣告（循環）
-    if (_locationBasedAds.isNotEmpty) {
-      await _playNextLocationAd();
-      return;
-    }
+    // 🔽🔽🔽 鎖定 🔽🔽🔽
+    _isPlayingNext = true;
 
-    // 如果隊列為空，播放本地影片
-    if (_localVideoPlaylist.isNotEmpty) {
-      print('📋 播放隊列為空，播放本地影片');
-      await _playNextLocalVideo();
-      return;
-    }
+    try {
+      // 這裡是你原本的 _playNext() 的所有邏輯
+      // 優先播放隊列中的廣告（非 location_based）
+      if (_playQueue.isNotEmpty) {
+        final item = _playQueue.removeAt(0);
+        _currentItem = item;
+        onItemChanged?.call(item);
 
-    // 如果沒有任何影片，保持閒置狀態
-    print('📋 沒有任何影片可播放');
-    _updateState(PlaybackState.idle);
+        print('▶️ 播放隊列廣告: ${item.advertisementName}');
+        await _playVideo(item.videoFilename);
+        return; // return 會觸發 finally，這是正確的
+      }
+
+      if (_playbackMode == PlaybackMode.campaign) {
+        if (_campaignPlaylist.isEmpty) {
+          print('⚠️ 活動播放列表為空，恢復本地模式');
+          _playbackMode = PlaybackMode.local;
+          _activeCampaignId = null;
+        } else {
+          final item = _campaignPlaylist[_currentCampaignIndex];
+          _currentItem = item;
+          onItemChanged?.call(item);
+
+          print(
+            '🎯 播放活動影片 (${_currentCampaignIndex + 1}/${_campaignPlaylist.length}): '
+            '${item.advertisementName}',
+          );
+          await _playVideo(item.videoFilename);
+          _currentCampaignIndex =
+              (_currentCampaignIndex + 1) % _campaignPlaylist.length;
+          return;
+        }
+      }
+
+      // 播放位置相關的廣告（循環）
+      if (_locationBasedAds.isNotEmpty) {
+        await _playNextLocationAd();
+        return;
+      }
+
+      // 如果隊列為空，播放本地影片
+      if (_localVideoPlaylist.isNotEmpty) {
+        print('📋 播放隊列為空，播放本地影片');
+        await _playNextLocalVideo();
+        return;
+      }
+
+      // 如果沒有任何影片，保持閒置狀態
+      print('📋 沒有任何影片可播放');
+      _updateState(PlaybackState.idle);
+    } catch (e) {
+      print("❌ _playNext 執行時發生未預期的錯誤: $e");
+      _updateState(PlaybackState.error);
+      onError?.call('播放器切換失敗: $e');
+    } finally {
+      // 🔽🔽🔽 (最重要) 無論成功或失敗都要解鎖 🔽🔽🔽
+      _isPlayingNext = false;
+    }
   }
 
   /// 播放下一個本地影片
   Future<void> _playNextLocalVideo() async {
+    // 注意：這個方法現在由 _playNext() 統一調度
     if (_localVideoPlaylist.isEmpty) {
       print('⚠️ 本地影片列表為空');
       _updateState(PlaybackState.idle);
@@ -291,6 +420,46 @@ class PlaybackManager {
         (_currentLocalVideoIndex + 1) % _localVideoPlaylist.length;
   }
 
+  /// 確保在沒有遠端指示時仍播放本地影片
+  Future<void> ensureLocalPlayback() async {
+    if (_playbackMode == PlaybackMode.campaign) {
+      print('ℹ️ 活動播放模式中，略過本地播放檢查');
+      return;
+    }
+
+    // 如果正在載入或播放，維持現狀
+    if (_state == PlaybackState.loading || _state == PlaybackState.playing) {
+      return;
+    }
+
+    // 如果正在切換中，也維持現狀
+    if (_isPlayingNext) {
+      return;
+    }
+
+    // 如果暫停但仍有控制器，直接恢復
+    if (_state == PlaybackState.paused && _currentController != null) {
+      await _currentController!.play();
+      _updateState(PlaybackState.playing);
+      print('▶️ 從暫停恢復播放');
+      return;
+    }
+
+    // 若有排隊或位置廣告，按照既有流程播放
+    if (_playQueue.isNotEmpty || _locationBasedAds.isNotEmpty) {
+      await _playNext();
+      return;
+    }
+
+    // 最後使用本地影片循環播放
+    if (_localVideoPlaylist.isNotEmpty) {
+      await _playNext(); // 統一由 _playNext() 處理
+    } else {
+      print('⚠️ 沒有本地影片可播放，維持閒置狀態');
+      _updateState(PlaybackState.idle);
+    }
+  }
+
   /// 播放影片
   Future<void> _playVideo(
     String videoFilename, {
@@ -307,7 +476,8 @@ class PlaybackManager {
           _updateState(PlaybackState.error);
           onError?.call('影片檔案不存在');
 
-          // 播放下一個
+          // 播放下一個 (也需要延遲)
+          await Future.delayed(const Duration(seconds: 1));
           await _playNext();
           return;
         }
@@ -336,13 +506,20 @@ class PlaybackManager {
       // 設置循環播放（僅預設影片）
       controller.setLooping(isDefault);
 
-      // 監聽播放完成
+      // 🔽🔽🔽 FIX 2: 修改監聽播放完成的邏輯 🔽🔽🔽
+      bool isFinished = false; // 為这个 listener 加上專屬的守衛
       controller.addListener(() {
-        if (controller.value.position == controller.value.duration &&
-            controller.value.duration.inMilliseconds > 0) {
+        // 使用 >= 來增加容錯性
+        if (controller.value.position >= controller.value.duration &&
+            controller.value.duration.inMilliseconds > 0 &&
+            !isFinished) {
+          // 檢查守衛
+
+          isFinished = true; // 關閉守衛，確保只觸發一次
           _onVideoFinished();
         }
       });
+      // 🔼🔼🔼 FIX 2: 結束 🔼🔼🔼
 
       _currentController = controller;
       await controller.play();
@@ -353,6 +530,10 @@ class PlaybackManager {
       print('❌ 播放影片錯誤: $e');
       _updateState(PlaybackState.error);
       onError?.call('播放失敗: $e');
+
+      // 🔽🔽🔽 FIX 3: 在 catch 裡也加上延遲 🔽🔽🔽
+      // 避免因為初始化失敗導致的快速切換
+      await Future.delayed(const Duration(seconds: 1));
 
       // 嘗試播放下一個
       await _playNext();
@@ -371,6 +552,8 @@ class PlaybackManager {
   /// 停止當前影片
   Future<void> _stopCurrentVideo() async {
     if (_currentController != null) {
+      // 移除監聽，避免 dispose 後還觸發
+      _currentController!.removeListener(() {});
       await _currentController!.pause();
       await _currentController!.dispose();
       _currentController = null;
@@ -415,6 +598,10 @@ class PlaybackManager {
   /// 獲取播放隊列
   List<PlaybackItem> get queue => List.unmodifiable(_playQueue);
 
+  /// 獲取活動播放列表
+  List<PlaybackItem> get campaignPlaylist =>
+      List.unmodifiable(_campaignPlaylist);
+
   /// 獲取本地影片播放列表
   List<String> get localVideoPlaylist => List.unmodifiable(_localVideoPlaylist);
 
@@ -447,6 +634,27 @@ class PlaybackManager {
           isLocalVideo: false,
         ),
       );
+    }
+
+    if (_campaignPlaylist.isNotEmpty) {
+      for (var item in _campaignPlaylist) {
+        final isCurrentlyPlaying =
+            _currentItem != null &&
+            _playbackMode == PlaybackMode.campaign &&
+            _currentItem!.videoFilename == item.videoFilename &&
+            _currentItem!.advertisementId == item.advertisementId;
+
+        if (!isCurrentlyPlaying) {
+          playlist.add(
+            PlaybackInfo(
+              filename: item.videoFilename,
+              title: '${item.advertisementName} (活動影片)',
+              isCurrentPlaying: false,
+              isLocalVideo: false,
+            ),
+          );
+        }
+      }
     }
 
     // 位置相關的廣告（循環播放）
@@ -518,6 +726,10 @@ class PlaybackManager {
   Future<void> dispose() async {
     await _stopCurrentVideo();
     _playQueue.clear();
+    _campaignPlaylist.clear();
+    _currentCampaignIndex = 0;
+    _activeCampaignId = null;
+    _playbackMode = PlaybackMode.local;
     _updateState(PlaybackState.idle);
   }
 }

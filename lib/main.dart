@@ -183,7 +183,7 @@ class _AppContainerState extends State<AppContainer>
     };
 
     // 處理位置確認（檢測是否離開範圍）
-    _webSocketManager.onLocationAck = (data) {
+    _webSocketManager.onLocationAck = (data) async {
       // 如果位置確認中沒有推送影片，可能表示離開了範圍
       if (data['video_filename'] == null) {
         print('📍 位置確認：無新廣告推送');
@@ -191,7 +191,19 @@ class _AppContainerState extends State<AppContainer>
         _playbackManager.checkAndClearExpiredLocationAds(
           timeout: const Duration(seconds: 30),
         );
+        // 確保持續播放本地影片
+        await _playbackManager.ensureLocalPlayback();
       }
+    };
+
+    _webSocketManager.onStartCampaignPlayback =
+        (campaignId, playlistData) async {
+          await _handleStartCampaignPlayback(campaignId, playlistData);
+        };
+
+    _webSocketManager.onRevertToLocalPlaylist = () async {
+      print('🏠 收到 [REVERT_TO_LOCAL] 指令');
+      await _playbackManager.revertToLocalPlayback();
     };
   }
 
@@ -298,6 +310,90 @@ class _AppContainerState extends State<AppContainer>
     if (!success) {
       print('❌ 啟動下載失敗: ${command.advertisementId}');
     }
+  }
+
+  /// 處理活動播放命令
+  Future<void> _handleStartCampaignPlayback(
+    String campaignId,
+    List<dynamic> playlistData,
+  ) async {
+    print('🎬 收到 [START_CAMPAIGN_PLAYBACK] 指令，活動: $campaignId');
+
+    final playlist = playlistData
+        .map((item) => _parseCampaignPlaylistItem(campaignId, item))
+        .whereType<PlaybackItem>()
+        .toList();
+
+    await _validateAndStartCampaign(campaignId, playlist);
+  }
+
+  /// 將原始資料解析為 PlaybackItem
+  PlaybackItem? _parseCampaignPlaylistItem(String campaignId, dynamic rawItem) {
+    if (rawItem is! Map<String, dynamic>) {
+      print('⚠️ 無法解析活動播放項目: $rawItem');
+      return null;
+    }
+
+    final videoFilename =
+        rawItem['videoFilename'] as String? ??
+        rawItem['video_filename'] as String? ??
+        '';
+
+    if (videoFilename.isEmpty) {
+      print('⚠️ 活動播放項目缺少 videoFilename: $rawItem');
+      return null;
+    }
+
+    final advertisementId =
+        rawItem['advertisementId'] as String? ??
+        rawItem['advertisement_id'] as String? ??
+        'campaign-$campaignId-$videoFilename';
+
+    final advertisementName =
+        rawItem['advertisementName'] as String? ??
+        rawItem['advertisement_name'] as String? ??
+        videoFilename;
+
+    final trigger = rawItem['trigger'] as String? ?? 'campaign';
+
+    return PlaybackItem(
+      videoFilename: videoFilename,
+      advertisementId: advertisementId,
+      advertisementName: advertisementName,
+      trigger: trigger,
+      campaignId: campaignId,
+    );
+  }
+
+  /// 驗證活動播放列表並啟動播放
+  Future<void> _validateAndStartCampaign(
+    String campaignId,
+    List<PlaybackItem> playlist,
+  ) async {
+    if (playlist.isEmpty) {
+      print('⚠️ 活動 $campaignId 播放列表為空，不切換');
+      return;
+    }
+
+    for (final item in playlist) {
+      final exists = await _downloadManager.isVideoExists(item.videoFilename);
+      if (!exists) {
+        print('❌ 嚴重錯誤：影片 ${item.videoFilename} 未預先載入！');
+
+        _webSocketManager.sendPlaybackError(
+          error: '影片未預先載入',
+          campaignId: campaignId,
+          videoFilename: item.videoFilename,
+        );
+        return;
+      }
+    }
+
+    print('✅ 驗證通過，所有影片均已預載。');
+    await _playbackManager.startCampaignPlayback(
+      campaignId: campaignId,
+      playlist: playlist,
+    );
   }
 
   @override
