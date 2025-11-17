@@ -93,7 +93,10 @@ class _AppContainerState extends State<AppContainer>
 
       _downloadManager = DownloadManager(baseUrl: AppConfig.apiBaseUrl);
 
-      _playbackManager = PlaybackManager(downloadManager: _downloadManager);
+      _playbackManager = PlaybackManager(
+        downloadManager: _downloadManager,
+        webSocketManager: _webSocketManager,
+      );
 
       // 初始化位置服務
       _locationService = LocationService(webSocketManager: _webSocketManager);
@@ -176,24 +179,12 @@ class _AppContainerState extends State<AppContainer>
     // 處理連接事件
     _webSocketManager.onConnected = () {
       print('✅ WebSocket 已連接');
+      // 連線建立後立即補送一次最新位置
+      _locationService.sendCurrentLocation();
     };
 
     _webSocketManager.onDisconnected = () {
       print('❌ WebSocket 已斷開');
-    };
-
-    // 處理位置確認（檢測是否離開範圍）
-    _webSocketManager.onLocationAck = (data) async {
-      // 如果位置確認中沒有推送影片，可能表示離開了範圍
-      if (data['video_filename'] == null) {
-        print('📍 位置確認：無新廣告推送');
-        // 檢查並清理過期的位置廣告（超過 30 秒未收到新廣告）
-        _playbackManager.checkAndClearExpiredLocationAds(
-          timeout: const Duration(seconds: 30),
-        );
-        // 確保持續播放本地影片
-        await _playbackManager.ensureLocalPlayback();
-      }
     };
 
     _webSocketManager.onStartCampaignPlayback =
@@ -270,6 +261,16 @@ class _AppContainerState extends State<AppContainer>
         downloadedChunks: List.generate(command.totalChunks, (i) => i),
         totalChunks: command.totalChunks,
       );
+      return;
+    }
+
+    // 檢查是否正在播放（播放中不能下載）
+    if (_playbackManager.state == PlaybackState.playing ||
+        _playbackManager.state == PlaybackState.loading) {
+      print('⏸️ 正在播放中，暫緩下載: ${command.advertisementId}');
+      // 暫緩下載，等待播放完成後再下載
+      // 這裡可以選擇：1. 拒絕下載 2. 加入下載隊列等待播放完成
+      // 目前選擇暫緩，提示用戶
       return;
     }
 
@@ -375,7 +376,8 @@ class _AppContainerState extends State<AppContainer>
       return;
     }
 
-    for (final item in playlist) {
+    for (var i = 0; i < playlist.length; i++) {
+      final item = playlist[i];
       final exists = await _downloadManager.isVideoExists(item.videoFilename);
       if (!exists) {
         print('❌ 嚴重錯誤：影片 ${item.videoFilename} 未預先載入！');
@@ -384,6 +386,11 @@ class _AppContainerState extends State<AppContainer>
           error: '影片未預先載入',
           campaignId: campaignId,
           videoFilename: item.videoFilename,
+          advertisementId: item.advertisementId,
+          mode: 'campaign',
+          playlistIndex: i,
+          playlistLength: playlist.length,
+          trigger: item.trigger,
         );
         return;
       }
@@ -429,6 +436,7 @@ class _AppContainerState extends State<AppContainer>
           )
         : MainScreen(
             playbackManager: _playbackManager,
+            downloadManager: _downloadManager,
             isAdminMode: _isAdminMode,
             latestPosition: _latestPosition,
             lastLocationSentTime: _lastLocationSentTime,

@@ -185,6 +185,124 @@ class WebSocketManager {
     print('📥 請求下載: $advertisementId');
   }
 
+  void _emitPlaybackEvent(String event, Map<String, dynamic> payload) {
+    if (!isConnected) {
+      print('⚠️ 未連接，無法發送 $event');
+      return;
+    }
+
+    final data = {
+      'device_id': deviceId,
+      'event': event,
+      'timestamp': DateTime.now().toIso8601String(),
+      ...payload,
+    };
+
+    _socket!.emit(event, data);
+    print('📡 發送 $event: $data');
+  }
+
+  void sendPlaybackStarted({
+    required String mode,
+    required String advertisementId,
+    required String videoFilename,
+    String? campaignId,
+    String? trigger,
+    int? playlistIndex,
+    int? playlistLength,
+  }) {
+    final payload = <String, dynamic>{
+      'mode': mode,
+      'advertisement_id': advertisementId,
+      'video_filename': videoFilename,
+    };
+
+    if (campaignId != null && campaignId.isNotEmpty) {
+      payload['campaign_id'] = campaignId;
+    }
+
+    if (trigger != null && trigger.isNotEmpty) {
+      payload['trigger'] = trigger;
+    }
+
+    if (playlistIndex != null) {
+      payload['playlist_index'] = playlistIndex;
+    }
+
+    if (playlistLength != null) {
+      payload['playlist_length'] = playlistLength;
+    }
+
+    _emitPlaybackEvent('playback_started', payload);
+  }
+
+  void sendPlaybackCompleted({
+    required String mode,
+    required String advertisementId,
+    required String videoFilename,
+    String? campaignId,
+    String? trigger,
+    int? playlistIndex,
+    int? playlistLength,
+    int? nextPlaylistIndex,
+    Duration? playbackDuration,
+  }) {
+    final payload = <String, dynamic>{
+      'mode': mode,
+      'advertisement_id': advertisementId,
+      'video_filename': videoFilename,
+    };
+
+    if (campaignId != null && campaignId.isNotEmpty) {
+      payload['campaign_id'] = campaignId;
+    }
+
+    if (trigger != null && trigger.isNotEmpty) {
+      payload['trigger'] = trigger;
+    }
+
+    if (playlistIndex != null) {
+      payload['playlist_index'] = playlistIndex;
+    }
+
+    if (playlistLength != null) {
+      payload['playlist_length'] = playlistLength;
+    }
+
+    if (nextPlaylistIndex != null) {
+      payload['next_playlist_index'] = nextPlaylistIndex;
+    }
+
+    if (playbackDuration != null) {
+      payload['playback_duration_ms'] = playbackDuration.inMilliseconds;
+    }
+
+    _emitPlaybackEvent('playback_completed', payload);
+  }
+
+  void sendPlaybackModeChange({
+    required String mode,
+    String? campaignId,
+    String? reason,
+    String? previousMode,
+  }) {
+    final payload = <String, dynamic>{'mode': mode};
+
+    if (campaignId != null && campaignId.isNotEmpty) {
+      payload['campaign_id'] = campaignId;
+    }
+
+    if (reason != null && reason.isNotEmpty) {
+      payload['reason'] = reason;
+    }
+
+    if (previousMode != null && previousMode.isNotEmpty) {
+      payload['previous_mode'] = previousMode;
+    }
+
+    _emitPlaybackEvent('playback_mode_change', payload);
+  }
+
   /// 開始心跳
   void _startHeartbeat() {
     _stopHeartbeat();
@@ -326,23 +444,38 @@ class WebSocketManager {
 
   void sendPlaybackError({
     required String error,
-    required String campaignId,
     required String videoFilename,
+    String? campaignId,
+    String? advertisementId,
+    String mode = 'unknown',
+    int? playlistIndex,
+    int? playlistLength,
+    String? trigger,
   }) {
-    if (!isConnected) {
-      print('⚠️ 未連接，無法發送播放錯誤: $error');
-      return;
-    }
-
-    final payload = {
-      'device_id': deviceId,
+    final payload = <String, dynamic>{
       'error': error,
-      'campaign_id': campaignId,
       'video_filename': videoFilename,
+      'mode': mode,
+      'advertisement_id': advertisementId ?? 'unknown',
     };
 
-    _socket!.emit('playback_error', payload);
-    print('🚨 發送播放錯誤: $payload');
+    if (campaignId != null && campaignId.isNotEmpty) {
+      payload['campaign_id'] = campaignId;
+    }
+
+    if (playlistIndex != null) {
+      payload['playlist_index'] = playlistIndex;
+    }
+
+    if (playlistLength != null) {
+      payload['playlist_length'] = playlistLength;
+    }
+
+    if (trigger != null && trigger.isNotEmpty) {
+      payload['trigger'] = trigger;
+    }
+
+    _emitPlaybackEvent('playback_error', payload);
   }
 
   /// 更新設備 ID

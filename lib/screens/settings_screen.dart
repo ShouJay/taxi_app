@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:async';
 import '../config/app_config.dart';
 import '../services/websocket_manager.dart';
 import '../managers/playback_manager.dart';
 import '../services/download_manager.dart';
 import '../services/location_service.dart';
+import '../models/download_info.dart';
 
 // PlaybackInfo 在 playback_manager.dart 中定義
 
@@ -42,6 +44,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late bool _isAdminMode;
   bool _isUpdatingAdminMode = false;
 
+  // 下載進度相關
+  Map<String, DownloadTask> _activeDownloads = {};
+  Timer? _downloadMonitoringTimer;
+
   @override
   void initState() {
     super.initState();
@@ -54,6 +60,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _isAdminMode = widget.isAdminMode;
     _updateConnectionStatus();
     _startStatusMonitoring();
+    _startDownloadMonitoring();
+  }
+
+  /// 開始監聽下載進度
+  void _startDownloadMonitoring() {
+    // 定期檢查下載任務
+    _downloadMonitoringTimer = Timer.periodic(
+      const Duration(milliseconds: 500),
+      (timer) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+
+        final activeDownloads = widget.downloadManager.getActiveDownloads();
+        setState(() {
+          _activeDownloads = {
+            for (var task in activeDownloads) task.advertisementId: task,
+          };
+        });
+      },
+    );
   }
 
   /// 更新連接狀態
@@ -220,6 +248,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 color: Colors.blue,
               ),
             ],
+
+            const SizedBox(height: 32),
+            const Divider(),
+            const SizedBox(height: 32),
+
+            // 下載進度
+            _buildSectionTitle('下載進度'),
+            const SizedBox(height: 16),
+            _buildDownloadProgressSection(),
 
             const SizedBox(height: 32),
             const Divider(),
@@ -626,8 +663,179 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  /// 建立下載進度區段
+  Widget _buildDownloadProgressSection() {
+    if (_activeDownloads.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.grey.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Text(
+          '目前沒有進行中的下載任務',
+          style: TextStyle(color: Colors.grey),
+          textAlign: TextAlign.center,
+        ),
+      );
+    }
+
+    return Column(
+      children: _activeDownloads.values.map((task) {
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.blue.withOpacity(0.3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.download, color: Colors.blue, size: 24),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          task.downloadInfo.filename,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '廣告 ID: ${task.advertisementId}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.blue,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${task.progress}%',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              LinearProgressIndicator(
+                value: task.progress / 100,
+                backgroundColor: Colors.grey.withOpacity(0.3),
+                valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+                minHeight: 8,
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '分片: ${task.downloadedChunks.length}/${task.totalChunks}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[700],
+                    ),
+                  ),
+                  Text(
+                    '狀態: ${_getDownloadStatusText(task.status)}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: _getDownloadStatusColor(task.status),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              if (task.errorMessage != null) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error, color: Colors.red, size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          task.errorMessage!,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Colors.red,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  /// 獲取下載狀態文字
+  String _getDownloadStatusText(DownloadStatus status) {
+    switch (status) {
+      case DownloadStatus.pending:
+        return '等待中';
+      case DownloadStatus.downloading:
+        return '下載中';
+      case DownloadStatus.completed:
+        return '已完成';
+      case DownloadStatus.failed:
+        return '失敗';
+      case DownloadStatus.paused:
+        return '已暫停';
+    }
+  }
+
+  /// 獲取下載狀態顏色
+  Color _getDownloadStatusColor(DownloadStatus status) {
+    switch (status) {
+      case DownloadStatus.pending:
+        return Colors.grey;
+      case DownloadStatus.downloading:
+        return Colors.blue;
+      case DownloadStatus.completed:
+        return Colors.green;
+      case DownloadStatus.failed:
+        return Colors.red;
+      case DownloadStatus.paused:
+        return Colors.orange;
+    }
+  }
+
   @override
   void dispose() {
+    _downloadMonitoringTimer?.cancel();
     _deviceIdController.dispose();
     _serverUrlController.dispose();
     super.dispose();

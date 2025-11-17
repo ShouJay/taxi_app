@@ -3,10 +3,10 @@ import 'package:geolocator/geolocator.dart';
 import '../services/websocket_manager.dart';
 import '../config/app_config.dart';
 
-/// GPS 定位服務
+/// GPS 定位服務 (優化版)
 class LocationService {
   final WebSocketManager webSocketManager;
-  Timer? _locationTimer;
+  Timer? _locationTimer; // 改為非週期的心跳計時器
   Position? _currentPosition;
   bool _isRunning = false;
   StreamSubscription<Position>? _positionSubscription;
@@ -147,14 +147,33 @@ class LocationService {
       print('✅ 位置權限已授予');
       _isRunning = true;
 
-      // 獲取當前位置
-      await _getCurrentLocation();
+      // 【優化】優先獲取最後已知位置，以加快啟動速度
+      Position? lastKnownPosition;
+      try {
+        lastKnownPosition = await Geolocator.getLastKnownPosition();
+      } catch (e) {
+        print('⚠️ 獲取最後已知位置失敗: $e');
+      }
 
-      // 開始定期發送位置更新
-      _startLocationUpdates();
+      if (lastKnownPosition != null) {
+        print('📍 快速獲取到最後已知位置');
+        _currentPosition = lastKnownPosition;
+        // 立即發送一次
+        _sendLocationUpdate(_currentPosition!); // 這會觸發G次心跳計時
+        onLocationUpdate?.call(_currentPosition!);
+      } else {
+        print('📋 未找到最後已知位置，執行G次定位...');
+        // G次定位
+        await _getCurrentLocation(); // 這也會觸發G次心跳計時
+      }
 
       // 監聽位置變化（移動時更新）
       _startLocationStream();
+
+      // 如果G次定位和最後已知位置都失敗了，手動啟動G次計時器
+      if (_locationTimer == null) {
+        _restartLocationTimer();
+      }
 
       return true;
     } catch (e) {
@@ -184,17 +203,13 @@ class LocationService {
   Future<void> _getCurrentLocation() async {
     try {
       _currentPosition = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
+        desiredAccuracy: LocationAccuracy.high, // 【優化】提高精度
       );
 
       if (_currentPosition != null) {
-        // print('📍 當前位置:');
+        // print('📍 G次獲取位置:');
         // print('   緯度: ${_currentPosition!.latitude.toStringAsFixed(6)}');
         // print('   經度: ${_currentPosition!.longitude.toStringAsFixed(6)}');
-        // print('   精度: ${_currentPosition!.accuracy.toStringAsFixed(0)} 米');
-        // print('   海拔: ${_currentPosition!.altitude.toStringAsFixed(1)} 米');
-        // print('   速度: ${_currentPosition!.speed.toStringAsFixed(1)} m/s');
-        // print('   方位: ${_currentPosition!.heading.toStringAsFixed(0)}°');
 
         // 立即發送一次位置
         _sendLocationUpdate(_currentPosition!);
@@ -206,26 +221,20 @@ class LocationService {
     }
   }
 
-  /// 開始定期發送位置更新
-  void _startLocationUpdates() {
+  /// 【優化】G啟心跳計時器 (取代 _startLocationUpdates)
+  void _restartLocationTimer() {
     _locationTimer?.cancel();
-
-    // 立即發送一次
-    if (_currentPosition != null) {
-      _sendLocationUpdate(_currentPosition!);
-    }
-
-    // 定期發送（根據配置的間隔）
-    _locationTimer = Timer.periodic(AppConfig.locationUpdateInterval, (_) {
+    _locationTimer = Timer(AppConfig.locationUpdateInterval, () {
+      // 時間到了，如果 _currentPosition 存在，發送一次「心跳」位置
       if (_currentPosition != null) {
+        print('⏰ 定時器觸發，發送心跳位置');
         _sendLocationUpdate(_currentPosition!);
       } else {
-        // 如果沒有當前位置，嘗試獲取
+        // 如果沒有位置，嘗試獲取
+        print('⏰ 定時器觸發，但無位置，嘗試G新獲取');
         _getCurrentLocation();
       }
     });
-
-    print('✅ 已啟動定期位置更新，間隔: ${AppConfig.locationUpdateInterval.inSeconds} 秒');
   }
 
   /// 監聽位置變化（移動時更新）
@@ -233,8 +242,8 @@ class LocationService {
     _positionSubscription?.cancel();
     final positionStream = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.medium,
-        distanceFilter: 10, // 移動 10 米才更新
+        accuracy: LocationAccuracy.high, // 【優化】提高精度
+        distanceFilter: 5, // 【優化】降低移動G值 (米)
       ),
     );
 
@@ -244,11 +253,9 @@ class LocationService {
         // print('📍 位置更新 (移動觸發):');
         // print('   緯度: ${position.latitude.toStringAsFixed(6)}');
         // print('   經度: ${position.longitude.toStringAsFixed(6)}');
-        // print('   精度: ${position.accuracy.toStringAsFixed(0)} 米');
-        // print('   海拔: ${position.altitude.toStringAsFixed(1)} 米');
         // print('   速度: ${position.speed.toStringAsFixed(1)} m/s');
 
-        // 發送位置更新
+        // 發送位置更新 (這會自動G啟心跳計時器)
         _sendLocationUpdate(position);
         onLocationUpdate?.call(position);
       },
@@ -261,6 +268,7 @@ class LocationService {
           // 重新啟動位置串流，避免因超時而停止更新
           Future.delayed(const Duration(seconds: 1), () {
             if (_isRunning) {
+              print('🔁 監聽超時，G新啟動位置串流');
               _startLocationStream();
             }
           });
@@ -268,13 +276,15 @@ class LocationService {
       },
     );
 
-    print('✅ 已啟動位置變化監聽');
+    print('✅ 已啟動位置變化監聽 (精度: high, 距離: 5m)');
   }
 
   /// 發送位置更新到伺服器
   void _sendLocationUpdate(Position position) {
     if (!webSocketManager.isConnected) {
       print('⚠️ WebSocket 未連接，無法發送位置更新');
+      // 仍然排程下一次重試，避免卡死
+      _restartLocationTimer();
       return;
     }
 
@@ -284,12 +294,21 @@ class LocationService {
     // print('📤 發送位置 #$_sentCount:');
     // print('   緯度: ${position.latitude.toStringAsFixed(6)}');
     // print('   經度: ${position.longitude.toStringAsFixed(6)}');
-    // print('   精度: ${position.accuracy.toStringAsFixed(0)} 米');
-    // print('   海拔: ${position.altitude.toStringAsFixed(1)} 米');
-    // print('   速度: ${position.speed.toStringAsFixed(1)} m/s');
     // print('   時間: ${_lastLocationSentTime!.toString().substring(0, 19)}');
 
+    // TODO: 考慮發送更多資訊 (需要修改 WebSocketManager)
+    // webSocketManager.sendLocationUpdate(
+    //   longitude: position.longitude,
+    //   latitude: position.latitude,
+    //   speed: position.speed,
+    //   heading: position.heading,
+    //   accuracy: position.accuracy,
+    //   timestamp: position.timestamp,
+    // );
     webSocketManager.sendLocationUpdate(position.longitude, position.latitude);
+
+    // 【優化】每次發送後，都G新G次心跳計時
+    _restartLocationTimer();
   }
 
   /// 手動發送當前位置
@@ -334,7 +353,7 @@ class LocationService {
   /// 清理資源
   void dispose() {
     stop();
-    _positionSubscription?.cancel();
-    _positionSubscription = null;
+    // _positionSubscription?.cancel(); // stop() 已經處理了
+    // _positionSubscription = null;
   }
 }

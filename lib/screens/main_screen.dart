@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:video_player/video_player.dart';
 import '../managers/playback_manager.dart';
+import '../services/download_manager.dart';
 import '../config/app_config.dart';
 
 /// 主畫面 - 影片播放
 class MainScreen extends StatefulWidget {
   final PlaybackManager playbackManager;
+  final DownloadManager downloadManager;
   final bool isAdminMode;
   final Position? latestPosition;
   final DateTime? lastLocationSentTime;
@@ -15,6 +17,7 @@ class MainScreen extends StatefulWidget {
   const MainScreen({
     Key? key,
     required this.playbackManager,
+    required this.downloadManager,
     required this.isAdminMode,
     this.latestPosition,
     this.lastLocationSentTime,
@@ -47,6 +50,13 @@ class _MainScreenState extends State<MainScreen> {
         setState(() {});
       }
     };
+
+    // 監聽播放啟用狀態變化
+    widget.playbackManager.onPlaybackEnabledChanged = (enabled) {
+      if (mounted) {
+        setState(() {});
+      }
+    };
   }
 
   @override
@@ -69,6 +79,19 @@ class _MainScreenState extends State<MainScreen> {
             if (widget.isAdminMode && widget.playbackManager.queueLength > 0)
               Positioned(top: 40, right: 20, child: _buildQueueIndicator()),
 
+            // 播放控制按鈕（管理員模式）
+            if (widget.isAdminMode)
+              Positioned(
+                top: 40,
+                left: 0,
+                right: 0,
+                child: Center(child: _buildPlaybackControlButton()),
+              ),
+
+            // 設定圖標（管理員模式）
+            if (widget.isAdminMode)
+              Positioned(top: 20, right: 20, child: _buildSettingsButton()),
+
             if (widget.isAdminMode)
               Positioned(left: 20, bottom: 40, child: _buildAdminInfoPanel()),
           ],
@@ -82,11 +105,9 @@ class _MainScreenState extends State<MainScreen> {
     final controller = widget.playbackManager.controller;
     final state = widget.playbackManager.state;
 
-    // 在載入過程中顯示進度條，避免已被釋放的控制器仍被使用
+    // 在載入過程中顯示黑屏幕
     if (state == PlaybackState.loading) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      );
+      return const SizedBox.expand(child: ColoredBox(color: Colors.black));
     }
 
     if (state == PlaybackState.error) {
@@ -99,9 +120,7 @@ class _MainScreenState extends State<MainScreen> {
     }
 
     if (controller == null || !controller.value.isInitialized) {
-      return const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      );
+      return const SizedBox.expand(child: ColoredBox(color: Colors.black));
     }
 
     // 顯示影片
@@ -191,8 +210,7 @@ class _MainScreenState extends State<MainScreen> {
     final PlaybackItem? currentItem = widget.playbackManager.currentItem;
     final bool isCampaignMode =
         widget.playbackManager.playbackMode == PlaybackMode.campaign;
-    final String campaignId =
-        widget.playbackManager.activeCampaignId ?? '未提供';
+    final String campaignId = widget.playbackManager.activeCampaignId ?? '未提供';
     final styleBase = const TextStyle(color: Colors.white, fontSize: 14);
 
     final latitude = position != null
@@ -206,7 +224,8 @@ class _MainScreenState extends State<MainScreen> {
         : null;
     final sentTimeText = _formatDateTime(sentTime);
     final playbackSource = _describePlaybackSource(currentItem);
-    final videoName = currentItem?.advertisementName ?? '尚未播放';
+    // 顯示影片名稱，如果不是檔號格式（不包含 .mp4 等擴展名），則直接顯示
+    final videoName = _getDisplayName(currentItem);
 
     return Container(
       constraints: const BoxConstraints(maxWidth: 360),
@@ -236,7 +255,11 @@ class _MainScreenState extends State<MainScreen> {
             const SizedBox(height: 4),
             Row(
               children: [
-                const Icon(Icons.campaign, color: Colors.purpleAccent, size: 18),
+                const Icon(
+                  Icons.campaign,
+                  color: Colors.purpleAccent,
+                  size: 18,
+                ),
                 const SizedBox(width: 6),
                 Text('活動播放中 (ID: $campaignId)', style: styleBase),
               ],
@@ -285,8 +308,7 @@ class _MainScreenState extends State<MainScreen> {
     final currentItem = widget.playbackManager.currentItem;
     final bool isCampaignMode =
         widget.playbackManager.playbackMode == PlaybackMode.campaign;
-    final String campaignId =
-        widget.playbackManager.activeCampaignId ?? '未提供';
+    final String campaignId = widget.playbackManager.activeCampaignId ?? '未提供';
 
     IconData icon;
     String text;
@@ -300,7 +322,11 @@ class _MainScreenState extends State<MainScreen> {
         break;
       case PlaybackState.playing:
         icon = Icons.play_circle;
-        text = currentItem?.advertisementName ?? '播放中';
+        text = _getDisplayName(currentItem);
+        // 如果是"尚未播放"，改為"播放中"
+        if (text == '尚未播放') {
+          text = '播放中';
+        }
         color = Colors.green;
         break;
       case PlaybackState.paused:
@@ -349,14 +375,15 @@ class _MainScreenState extends State<MainScreen> {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.campaign, color: Colors.purpleAccent, size: 18),
+                const Icon(
+                  Icons.campaign,
+                  color: Colors.purpleAccent,
+                  size: 18,
+                ),
                 const SizedBox(width: 6),
                 Text(
                   '活動播放中 (ID: $campaignId)',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                  ),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
                 ),
               ],
             ),
@@ -438,6 +465,44 @@ class _MainScreenState extends State<MainScreen> {
         '${local.second.toString().padLeft(2, '0')}';
   }
 
+  /// 獲取顯示名稱（優先顯示影片名稱，如果是檔號則處理）
+  String _getDisplayName(PlaybackItem? item) {
+    if (item == null) {
+      return '尚未播放';
+    }
+
+    // 如果 advertisementName 存在且不是檔號格式（不包含 .mp4, .mov 等擴展名），直接使用
+    final name = item.advertisementName;
+    if (name.isNotEmpty) {
+      // 檢查是否是檔號格式（包含視頻文件擴展名）
+      final hasVideoExtension =
+          name.toLowerCase().endsWith('.mp4') ||
+          name.toLowerCase().endsWith('.mov') ||
+          name.toLowerCase().endsWith('.avi') ||
+          name.toLowerCase().endsWith('.mkv') ||
+          name.toLowerCase().endsWith('.webm');
+
+      // 如果不是檔號格式，直接使用
+      if (!hasVideoExtension) {
+        return name;
+      }
+
+      // 如果是檔號格式，提取檔名（不含擴展名）作為顯示名稱
+      final nameWithoutExt = name.replaceAll(RegExp(r'\.[^.]+$'), '');
+      // 如果去掉擴展名後還有內容，使用它；否則使用原始名稱
+      return nameWithoutExt.isNotEmpty ? nameWithoutExt : name;
+    }
+
+    // 如果 advertisementName 為空，嘗試從 videoFilename 提取
+    final filename = item.videoFilename;
+    if (filename.isNotEmpty) {
+      final nameWithoutExt = filename.replaceAll(RegExp(r'\.[^.]+$'), '');
+      return nameWithoutExt.isNotEmpty ? nameWithoutExt : filename;
+    }
+
+    return '未命名影片';
+  }
+
   String _describePlaybackSource(PlaybackItem? item) {
     if (item == null) {
       return '尚未播放';
@@ -459,7 +524,72 @@ class _MainScreenState extends State<MainScreen> {
       return '後端推播';
     }
 
-    return '一般播放';
+    return '本地循環播放';
+  }
+
+  /// 建立播放控制按鈕（管理員模式）
+  Widget _buildPlaybackControlButton() {
+    final isEnabled = widget.playbackManager.isPlaybackEnabled;
+    final isPlaying = widget.playbackManager.state == PlaybackState.playing;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isEnabled ? Colors.green : Colors.red,
+          width: 2,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: Icon(
+              isEnabled
+                  ? (isPlaying ? Icons.pause_circle : Icons.play_circle)
+                  : Icons.stop_circle,
+              color: isEnabled ? Colors.green : Colors.red,
+              size: 28,
+            ),
+            onPressed: () async {
+              await widget.playbackManager.setPlaybackEnabled(!isEnabled);
+            },
+            tooltip: isEnabled ? '暫停播放' : '開始播放',
+          ),
+          const SizedBox(width: 8),
+          Text(
+            isEnabled ? (isPlaying ? '播放中' : '已啟用') : '已停用',
+            style: TextStyle(
+              color: isEnabled ? Colors.green : Colors.red,
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 建立設定按鈕（管理員模式）
+  Widget _buildSettingsButton() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.7),
+        borderRadius: BorderRadius.circular(25),
+        border: Border.all(color: Colors.blueAccent.withOpacity(0.6), width: 2),
+      ),
+      child: IconButton(
+        icon: const Icon(Icons.settings, color: Colors.blueAccent, size: 28),
+        onPressed: () {
+          print('⚙️ 開啟設定頁面');
+          widget.onSettingsRequested();
+        },
+        tooltip: '開啟設定',
+        padding: const EdgeInsets.all(8),
+      ),
+    );
   }
 
   @override
